@@ -1,0 +1,70 @@
+---
+- name: Uninstall lab Kubernetes cluster (standard)
+  hosts: k8s_cluster
+  become: true
+  tags:
+    - uninstall_standard
+  vars:
+    lab_uninstall_remote_path: /usr/local/sbin/lab-uninstall.sh
+  tasks:
+    - name: Ensure lab uninstall script exists on controller
+      ansible.builtin.stat:
+        path: "{{ playbook_dir | dirname }}/scripts/uninstall.sh"
+      register: lab_uninstall_local
+      delegate_to: localhost
+      run_once: true
+
+    - name: Fail if lab uninstall script is missing on controller
+      ansible.builtin.fail:
+        msg: "scripts/uninstall.sh not found in repo root on controller"
+      when: lab_uninstall_local.stat is not defined or not lab_uninstall_local.stat.exists
+      run_once: true
+
+    - name: Copy lab uninstall script to remote host
+      ansible.builtin.copy:
+        src: "{{ playbook_dir | dirname }}/scripts/uninstall.sh"
+        dest: "{{ lab_uninstall_remote_path }}"
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Run lab uninstall script (standard)
+      ansible.builtin.command:
+        argv:
+          - "{{ lab_uninstall_remote_path }}"
+
+- name: Uninstall lab Kubernetes cluster (FULL_RESET)
+  hosts: k8s_cluster
+  become: true
+  tags:
+    - uninstall_full_reset
+  vars:
+    lab_uninstall_remote_path: /usr/local/sbin/lab-uninstall.sh
+  tasks:
+    - name: Ensure lab uninstall script exists on controller
+      ansible.builtin.stat:
+        path: "{{ playbook_dir | dirname }}/scripts/uninstall.sh"
+      register: lab_uninstall_local
+      delegate_to: localhost
+      run_once: true
+
+    - name: Fail if lab uninstall script is missing on controller
+      ansible.builtin.fail:
+        msg: "scripts/uninstall.sh not found in repo root on controller"
+      when: lab_uninstall_local.stat is not defined or not lab_uninstall_local.stat.exists
+      run_once: true
+
+    - name: Copy lab uninstall script to remote host
+      ansible.builtin.copy:
+        src: "{{ playbook_dir | dirname }}/scripts/uninstall.sh"
+        dest: "{{ lab_uninstall_remote_path }}"
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Run lab uninstall script with FULL_RESET
+      ansible.builtin.command:
+        cmd: "{{ lab_uninstall_remote_path }}"
+      environment:
+        FULL_RESET: "1"
+
