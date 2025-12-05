@@ -387,3 +387,6 @@ metallb_enabled: false
 
 # Enable KVM preflight checks for worker nodes (required for SROS/containerlab deployments)
 kvm_preflight_enabled: true
+kvm_preflight_auto_install: true
+
+

@@ -32,6 +32,16 @@
         path: /dev/kvm
       register: kvm_preflight_dev_kvm
 
+    - name: KVM preflight | Record /dev/kvm availability
+      ansible.builtin.set_fact:
+        kvm_preflight_dev_kvm_ok: >-
+          {{
+            kvm_preflight_dev_kvm is defined
+            and (kvm_preflight_dev_kvm.stat is defined)
+            and (kvm_preflight_dev_kvm.stat.exists | default(false))
+            and (kvm_preflight_dev_kvm.stat.ischr | default(false))
+          }}
+
     - name: KVM preflight | Collect loaded kernel modules
       ansible.builtin.command: lsmod
       register: kvm_preflight_lsmod
@@ -40,6 +50,126 @@
     - name: KVM preflight | Determine whether a KVM module is loaded
       ansible.builtin.set_fact:
         kvm_preflight_has_module: "{{ ((kvm_preflight_lsmod.stdout | default('')) | regex_search('(?m)^(kvm|kvm_intel|kvm_amd)\\b')) is not none }}"
+
+    - name: KVM preflight | Record module availability
+      ansible.builtin.set_fact:
+        kvm_preflight_modules_ok: "{{ kvm_preflight_has_module | bool }}"
+
+    - name: KVM preflight | Determine whether remediation is required
+      ansible.builtin.set_fact:
+        kvm_preflight_require_fix: "{{ (not kvm_preflight_dev_kvm_ok | default(false)) or (not kvm_preflight_modules_ok | default(false)) }}"
+        kvm_preflight_auto_install_ran: false
+
+    - name: KVM preflight | Attempt automatic KVM installation when enabled
+      when:
+        - kvm_preflight_auto_install | default(false)
+        - kvm_preflight_require_fix | bool
+      block:
+        - name: KVM preflight | Fail when OS family is unsupported for auto install
+          ansible.builtin.fail:
+            msg: "kvm_preflight_auto_install is enabled but OS family {{ ansible_facts.os_family | default('unknown') }} is not supported for automatic KVM installation."
+          when: ansible_facts.os_family | default('') != 'Debian'
+
+        - name: KVM preflight | Determine vendor-specific module
+          ansible.builtin.set_fact:
+            kvm_preflight_vendor_module: >-
+              {%- set proc = (ansible_facts.processor | default([])) | map('lower') | list -%}
+              {%- if proc | select('search', 'intel') | list | length > 0 -%}
+              kvm_intel
+              {%- elif proc | select('search', 'amd') | list | length > 0 -%}
+              kvm_amd
+              {%- else -%}
+              kvm_intel
+              {%- endif -%}
+            kvm_preflight_vendor_module_alt: >-
+              {{ 'kvm_amd' if (kvm_preflight_vendor_module | default('kvm_intel')) == 'kvm_intel' else 'kvm_intel' }}
+
+        - name: KVM preflight | Install required KVM packages
+          ansible.builtin.package:
+            name:
+              - qemu-kvm
+              - libvirt-daemon-system
+              - libvirt-clients
+              - bridge-utils
+            state: present
+
+        - name: KVM preflight | Load kvm base module
+          ansible.builtin.command:
+            argv:
+              - modprobe
+              - kvm
+          register: kvm_preflight_modprobe_base
+          changed_when: kvm_preflight_modprobe_base.rc == 0
+
+        - name: KVM preflight | Load vendor-specific KVM module
+          ansible.builtin.command:
+            argv:
+              - modprobe
+              - "{{ kvm_preflight_vendor_module }}"
+          register: kvm_preflight_modprobe_vendor
+          changed_when: kvm_preflight_modprobe_vendor.rc == 0
+          failed_when: false
+
+        - name: KVM preflight | Load alternate vendor module when needed
+          ansible.builtin.command:
+            argv:
+              - modprobe
+              - "{{ kvm_preflight_vendor_module_alt }}"
+          register: kvm_preflight_modprobe_vendor_alt
+          changed_when: kvm_preflight_modprobe_vendor_alt.rc == 0
+          failed_when: kvm_preflight_modprobe_vendor.rc != 0 and kvm_preflight_modprobe_vendor_alt.rc != 0
+          when: kvm_preflight_modprobe_vendor.rc != 0
+
+        - name: KVM preflight | Determine active vendor module
+          ansible.builtin.set_fact:
+            kvm_preflight_active_vendor_module: "{{ kvm_preflight_vendor_module if kvm_preflight_modprobe_vendor.rc == 0 else kvm_preflight_vendor_module_alt }}"
+
+        - name: KVM preflight | Persist module loading configuration
+          ansible.builtin.copy:
+            dest: /etc/modules-load.d/kvm.conf
+            content: |-
+              kvm
+              {{ kvm_preflight_active_vendor_module | default('kvm_intel') }}
+            owner: root
+            group: root
+            mode: "0644"
+
+        - name: KVM preflight | Mark that auto install was executed
+          ansible.builtin.set_fact:
+            kvm_preflight_auto_install_ran: true
+
+    - name: KVM preflight | Refresh /dev/kvm status after remediation
+      ansible.builtin.stat:
+        path: /dev/kvm
+      register: kvm_preflight_dev_kvm
+      when: kvm_preflight_auto_install_ran | default(false)
+
+    - name: KVM preflight | Record /dev/kvm availability (post remediation)
+      ansible.builtin.set_fact:
+        kvm_preflight_dev_kvm_ok: >-
+          {{
+            kvm_preflight_dev_kvm is defined
+            and (kvm_preflight_dev_kvm.stat is defined)
+            and (kvm_preflight_dev_kvm.stat.exists | default(false))
+            and (kvm_preflight_dev_kvm.stat.ischr | default(false))
+          }}
+      when: kvm_preflight_auto_install_ran | default(false)
+
+    - name: KVM preflight | Refresh loaded modules after remediation
+      ansible.builtin.command: lsmod
+      register: kvm_preflight_lsmod
+      changed_when: false
+      when: kvm_preflight_auto_install_ran | default(false)
+
+    - name: KVM preflight | Determine whether a KVM module is loaded (post-remediation)
+      ansible.builtin.set_fact:
+        kvm_preflight_has_module: "{{ ((kvm_preflight_lsmod.stdout | default('')) | regex_search('(?m)^(kvm|kvm_intel|kvm_amd)\\b')) is not none }}"
+      when: kvm_preflight_auto_install_ran | default(false)
+
+    - name: KVM preflight | Recalculate remediation need after remediation
+      ansible.builtin.set_fact:
+        kvm_preflight_require_fix: "{{ (not kvm_preflight_dev_kvm_ok | default(false)) or (not kvm_preflight_modules_ok | default(false)) }}"
+      when: kvm_preflight_auto_install_ran | default(false)
 
     - name: KVM preflight | Fail when CPU virtualization extensions are missing
       ansible.builtin.fail:
@@ -51,10 +181,10 @@
       ansible.builtin.fail:
         msg: >-
           /dev/kvm is not present. Enable KVM on the host to run workloads such as SROS/containerlab.
-      when: not (kvm_preflight_dev_kvm.stat.exists and kvm_preflight_dev_kvm.stat.ischr)
+      when: not kvm_preflight_dev_kvm_ok | default(false)
 
     - name: KVM preflight | Fail when no KVM kernel module is loaded
       ansible.builtin.fail:
         msg: >-
           No KVM kernel module (kvm, kvm_intel, or kvm_amd) is loaded. Load the appropriate module so this node can run KVM workloads such as SROS/containerlab.
-      when: not kvm_preflight_has_module | bool
+      when: not kvm_preflight_modules_ok | default(false)

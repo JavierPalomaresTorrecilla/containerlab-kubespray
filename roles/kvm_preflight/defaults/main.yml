@@ -1,3 +1,6 @@
 ---
 # Toggle for enabling/disabling the KVM preflight checks
 kvm_preflight_enabled: false
+
+# Optionally attempt to auto-install and configure KVM when checks fail
+kvm_preflight_auto_install: false
