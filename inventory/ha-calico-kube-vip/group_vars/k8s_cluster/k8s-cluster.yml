@@ -384,3 +384,6 @@ kube_proxy_strict_arp: true          # Kube-vip mode ARP
 kube_vip_controlplane_enabled: true
 kube_vip_services_enabled: true
 metallb_enabled: false
+
+# Enable KVM preflight checks for worker nodes (required for SROS/containerlab deployments)
+kvm_preflight_enabled: true

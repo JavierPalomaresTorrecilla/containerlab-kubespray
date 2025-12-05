@@ -5,6 +5,15 @@
 - name: Gather facts
   import_playbook: internal_facts.yml
 
+- name: Run KVM preflight checks on worker nodes
+  hosts: kube_node
+  gather_facts: false
+  any_errors_fatal: "{{ any_errors_fatal | default(true) }}"
+  environment: "{{ proxy_disable_env }}"
+  roles:
+    - { role: kvm_preflight }
+  when: kvm_preflight_enabled | default(false)
+
 - name: Prepare for etcd install
   hosts: k8s_cluster:etcd
   gather_facts: false

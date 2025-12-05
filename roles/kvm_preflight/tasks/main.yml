@@ -1,0 +1,60 @@
+---
+- name: KVM preflight | Validate virtualization support
+  when: kvm_preflight_enabled | default(false)
+  tags:
+    - kvm_preflight
+  block:
+    - name: KVM preflight | Record processor flags
+      ansible.builtin.set_fact:
+        kvm_preflight_processor_flags: "{{ ansible_facts.processor_flags | default([]) | list }}"
+
+    - name: KVM preflight | Read /proc/cpuinfo when processor flags are unavailable
+      ansible.builtin.slurp:
+        src: /proc/cpuinfo
+      register: kvm_preflight_cpuinfo_raw
+      when: kvm_preflight_processor_flags | length == 0
+
+    - name: KVM preflight | Check fallback CPU info for virtualization extensions
+      ansible.builtin.set_fact:
+        kvm_preflight_cpuinfo_has_vt: "{{ ((kvm_preflight_cpuinfo_raw.content | b64decode) | regex_search('(?im)\\b(vmx|svm)\\b')) is not none }}"
+      when: kvm_preflight_cpuinfo_raw is defined
+
+    - name: KVM preflight | Determine CPU virtualization capability
+      ansible.builtin.set_fact:
+        kvm_preflight_cpu_has_virtualization: >-
+          {{
+            (kvm_preflight_processor_flags | intersect(['vmx', 'svm']) | length > 0)
+            or (kvm_preflight_cpuinfo_has_vt | default(false))
+          }}
+
+    - name: KVM preflight | Check /dev/kvm device
+      ansible.builtin.stat:
+        path: /dev/kvm
+      register: kvm_preflight_dev_kvm
+
+    - name: KVM preflight | Collect loaded kernel modules
+      ansible.builtin.command: lsmod
+      register: kvm_preflight_lsmod
+      changed_when: false
+
+    - name: KVM preflight | Determine whether a KVM module is loaded
+      ansible.builtin.set_fact:
+        kvm_preflight_has_module: "{{ ((kvm_preflight_lsmod.stdout | default('')) | regex_search('(?m)^(kvm|kvm_intel|kvm_amd)\\b')) is not none }}"
+
+    - name: KVM preflight | Fail when CPU virtualization extensions are missing
+      ansible.builtin.fail:
+        msg: >-
+          CPU virtualization extensions (vmx/svm) are not available. Enable hardware virtualization in BIOS/UEFI so this node can run KVM workloads such as SROS/containerlab.
+      when: not kvm_preflight_cpu_has_virtualization | bool
+
+    - name: KVM preflight | Fail when /dev/kvm device is missing
+      ansible.builtin.fail:
+        msg: >-
+          /dev/kvm is not present. Enable KVM on the host to run workloads such as SROS/containerlab.
+      when: not (kvm_preflight_dev_kvm.stat.exists and kvm_preflight_dev_kvm.stat.ischr)
+
+    - name: KVM preflight | Fail when no KVM kernel module is loaded
+      ansible.builtin.fail:
+        msg: >-
+          No KVM kernel module (kvm, kvm_intel, or kvm_amd) is loaded. Load the appropriate module so this node can run KVM workloads such as SROS/containerlab.
+      when: not kvm_preflight_has_module | bool
