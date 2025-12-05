@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ kube_vip_cloud_provider_configmap_name }}
+  namespace: {{ kube_vip_cloud_provider_namespace }}
+data:
+  range-global: {{ kube_vip_cloud_provider_lb_ip_range | quote }}

@@ -1,0 +1,15 @@
+---
+kube_vip_cloud_provider_enabled: false
+
+# Namespace where the kube-vip cloud controller runs
+kube_vip_cloud_provider_namespace: kube-system
+
+# Name of the kube-vip ConfigMap used for LoadBalancer IP ranges
+kube_vip_cloud_provider_configmap_name: kubevip
+
+# LoadBalancer IP range for kube-vip (override per inventory)
+kube_vip_cloud_provider_lb_ip_range: ""
+
+# Image settings (keep simple but overridable)
+kube_vip_cloud_provider_image_repo: ghcr.io/kube-vip/kube-vip-cloud-provider
+kube_vip_cloud_provider_image_tag: latest

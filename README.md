@@ -96,31 +96,26 @@ Congratulations! You can now share the external kubeconfig with authorised users
 
 ---
 
-### Manual steps that would be cool to automate:
+### Manual steps that would be cool to automate (now mostly covered):
 
-1. **Kube-vip cloud provide installation**:
-```bash
-kubectl apply -f https://raw.githubusercontent.com/kube-vip/kube-vip-cloud-provider/main/manifest/kube-vip-cloud-controller.yaml
-```
+1. **Kube-vip cloud provider installation and ConfigMap**:
+   Set these variables in `inventory/ha-calico-kube-vip/group_vars/k8s_cluster/k8s-cluster.yml`:
+   ```yaml
+   kube_vip_cloud_provider_enabled: true
+   kube_vip_cloud_provider_lb_ip_range: "192.168.200.161-192.168.200.165"
+   ```
+   Kubespray will deploy the kube-vip cloud provider during the *Install Kubernetes apps* phase and automatically create/patch the `kubevip` ConfigMap in `kube-system` with `range-global=192.168.200.161-192.168.200.165`. The manual commands below are kept for reference only and are no longer required.
+   ```bash
+   kubectl apply -f https://raw.githubusercontent.com/kube-vip/kube-vip-cloud-provider/main/manifest/kube-vip-cloud-controller.yaml
+   kubectl create configmap -n kube-system kubevip --from-literal range-global=192.168.200.161-192.168.200.165
+   kubectl delete pod -n kube-system kube-vip-cloud-provider-<pod-id>
+   ```
 
-2. **Provide the range of IPs (aka external IPs) that the LB will use to expose the pods**:
-```bash
-# Delete the configmap:
-kubectl delete configmap -n kube-system kubevip
+2. **Clabernetes installation**:
+   Follow [Clabernetes official documentation](https://containerlab.dev/manual/clabernetes/install/)
 
-# Create the new one: 
-kubectl create configmap -n kube-system kubevip --from-literal range-global=192.168.200.161-192.168.200.165
-
-# Delete the kube-vip-cloud-provider pod (it will be recreated automatically with the new configmap)
-kubectl delete pod -n kube-system kube-vip-cloud-provider-<pod-id>
-```
-
-3. **Clabernetes installation**:
-Follow [Clabernetes official documentation](https://containerlab.dev/manual/clabernetes/install/)
-
-
-4. **Installation of custom monitoring stack**:
-TODO. Check with @Cesar, as he has previous experience deploying it.
+3. **Installation of custom monitoring stack**:
+   TODO. Check with @Cesar, as he has previous experience deploying it.
 
 ---
 

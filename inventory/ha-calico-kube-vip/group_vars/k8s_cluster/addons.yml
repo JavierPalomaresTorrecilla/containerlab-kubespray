@@ -178,6 +178,10 @@ cert_manager_enabled: false
 
 # MetalLB deployment
 metallb_enabled: false
+
+# kube-vip cloud provider (LoadBalancer IPAM for kube-vip)
+kube_vip_cloud_provider_enabled: false
+
 metallb_speaker_enabled: "{{ metallb_enabled }}"
 metallb_namespace: "metallb-system"
 # metallb_version: 0.13.9

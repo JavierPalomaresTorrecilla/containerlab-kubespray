@@ -1,0 +1,39 @@
+---
+- name: Kube-vip cloud provider | Ensure addon directory exists
+  ansible.builtin.file:
+    path: "{{ kube_config_dir }}/addons/kube_vip_cloud_provider"
+    state: directory
+    mode: "0755"
+  when: kube_vip_cloud_provider_enabled | default(false)
+
+- name: Kube-vip cloud provider | Render manifest
+  ansible.builtin.template:
+    src: kube-vip-cloud-controller.yaml.j2
+    dest: "{{ kube_config_dir }}/addons/kube_vip_cloud_provider/kube-vip-cloud-controller.yaml"
+    mode: "0644"
+  when: kube_vip_cloud_provider_enabled | default(false)
+
+- name: Kube-vip cloud provider | Apply manifests
+  kube:
+    kubectl: "{{ bin_dir }}/kubectl"
+    filename: "{{ kube_config_dir }}/addons/kube_vip_cloud_provider/kube-vip-cloud-controller.yaml"
+    state: present
+  when: kube_vip_cloud_provider_enabled | default(false)
+
+- name: Kube-vip cloud provider | Render LoadBalancer range ConfigMap
+  ansible.builtin.template:
+    src: kube-vip-configmap.yaml.j2
+    dest: "{{ kube_config_dir }}/addons/kube_vip_cloud_provider/kube-vip-configmap.yaml"
+    mode: "0644"
+  when:
+    - kube_vip_cloud_provider_enabled | default(false)
+    - kube_vip_cloud_provider_lb_ip_range | default("") | length > 0
+
+- name: Kube-vip cloud provider | Apply LoadBalancer range ConfigMap
+  kube:
+    kubectl: "{{ bin_dir }}/kubectl"
+    filename: "{{ kube_config_dir }}/addons/kube_vip_cloud_provider/kube-vip-configmap.yaml"
+    state: present
+  when:
+    - kube_vip_cloud_provider_enabled | default(false)
+    - kube_vip_cloud_provider_lb_ip_range | default("") | length > 0

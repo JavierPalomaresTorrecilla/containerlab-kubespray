@@ -111,6 +111,13 @@ dependencies:
     tags:
       - metallb
 
+  - role: kubernetes-apps/kube_vip_cloud_provider
+    when:
+      - kube_vip_cloud_provider_enabled | default(false)
+      - inventory_hostname == groups['kube_control_plane'][0]
+    tags:
+      - kube_vip_cloud_provider
+
   - role: kubernetes-apps/argocd
     when:
       - argocd_enabled
