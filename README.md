@@ -40,24 +40,7 @@ sudo apt install -y qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils
 sudo systemctl enable --now libvirtd
 ```
 
-The `roles/kvm_preflight` role verifies CPU virtualization flags, `/dev/kvm`, and loaded modules before the Kubernetes installation begins.
-
-#### Optional: verify KVM preflight on workers
-
-The `kvm_preflight` role runs automatically whenever `kvm_preflight_enabled: true` in the inventory (the `inventory/ha-calico-kube-vip` scenario already sets it). To confirm the play is present you can list the playbook tags and grep for the KVM entry:
-
-```bash
-# List plays and tags for this scenario
-source .venv/bin/activate
-ansible-playbook \
-  -i inventory/ha-calico-kube-vip/inventory.ini \
-  playbooks/cluster.yml \
-  --limit k8s_cluster \
-  --become --list-tags | grep -i "KVM preflight" || true
-```
-
-Expected output (if wired correctly):
-`play #N (kube_node): Run KVM preflight checks on worker nodes  TAGS: []`, which confirms the worker validation step is part of the standard `cluster.yml` run.
+> The `roles/kvm_preflight` role verifies CPU virtualization flags, `/dev/kvm`, and loaded modules during the standard `playbooks/cluster.yml` run whenever `kvm_preflight_enabled: true` in the inventory. When `kvm_preflight_auto_install: true` is also set, it installs or enables the required KVM packages and modules on Debian/Ubuntu as part of that run.
 
 ## Python virtual environment and Ansible dependencies
 
@@ -137,7 +120,7 @@ This lab uses [kube-vip](https://kube-vip.io/) to provide a virtual IP (VIP) for
 
 ### Control plane virtual IP
 
-- The virtual IP for the API server is configured via `kube_vip_enabled: true` and `kube_vip_address` in `inventory/sample/cluster/k8s-cluster.yml`.
+- The virtual IP for the API server is configured via `kube_vip_enabled: true` and `kube_vip_address` in `inventory/ha-calico-kube-vip/group_vars/k8s_cluster/k8s-cluster.yml`.
 - The VIP must be an unused address on the same Layer 2 network as the control plane nodes. In the default GEANT lab, it is `192.168.123.200`.
 - `kube_vip_interface` must match the Linux network interface that is connected to that network on the control plane node (for example `ens3` or `eth0`). You can verify this with `ip addr`.
 - A kube-vip pod runs on the control plane node and answers ARP for the VIP. If you deploy multiple control plane nodes, kube-vip will use leader election so that only one node advertises the VIP at a time and the API endpoint stays reachable.
@@ -284,6 +267,87 @@ After the uninstall command, `playbooks/uninstall.yml` verifies that `kubectl` c
 ## Re-deploying after uninstall
 
 Once uninstall completes without asserts, rerun the deployment command from the “Deploying the Kubernetes lab cluster” section. The playbook recreates kubeconfigs under `/home/{{ ansible_user }}/.kube/` automatically, so no manual steps are required.
+
+## Tags overview
+
+The main playbook `playbooks/cluster.yml` and the uninstall playbook expose a number of Ansible tags inherited from upstream Kubespray plus a few lab-specific ones. This section documents the tags that are explicitly used or introduced by this lab and shows how to inspect the full tag set.
+
+### Lab-specific tags
+
+These tags are safe to rely on and are maintained as part of this scenario:
+
+- **`external_kubeconfig`**  
+  Runs only the tasks that derive an external kubeconfig pointing at the kube-vip virtual IP. Use this after the cluster is already up to create `~/.kube/config-external` for the Ansible SSH user, with `server: https://<kube_vip_address>:6443`. This feature is controlled by `configure_external_kubeconfig: true` in `inventory/ha-calico-kube-vip/group_vars/k8s_cluster/k8s-cluster.yml`.
+
+  Example:
+
+  ```bash
+  ansible-playbook \
+    -i inventory/ha-calico-kube-vip/inventory.ini \
+    playbooks/cluster.yml \
+    --become \
+    --tags external_kubeconfig
+  ```
+
+- **`uninstall_standard`**  
+  Performs a standard teardown of the lab: runs `kubeadm reset -f` where applicable, removes core Kubernetes directories, flushes iptables/IPVS state, and cleans up kubeconfigs for the Ansible SSH user. Leaves KVM tooling installed.
+
+  Example:
+
+  ```bash
+  ansible-playbook \
+    -i inventory/ha-calico-kube-vip/inventory.ini \
+    playbooks/uninstall.yml \
+    --tags uninstall_standard
+  ```
+
+- **`uninstall_full_reset`**  
+  Extends `uninstall_standard` with a deeper cleanup on Debian/Ubuntu: removes KVM-related packages (`qemu-kvm`, `libvirt-daemon-system`, `libvirt-clients`, `bridge-utils`) in addition to the Kubernetes files and kube-vip add-ons.
+
+  Example:
+
+  ```bash
+  ansible-playbook \
+    -i inventory/ha-calico-kube-vip/inventory.ini \
+    playbooks/uninstall.yml \
+    --tags uninstall_full_reset
+  ```
+
+### Inspecting all available tags
+
+Most tags are inherited directly from the upstream Kubespray roles and may change when you upgrade Kubespray. To see everything that is available for this scenario, run:
+
+```bash
+source .venv/bin/activate
+ansible-playbook \
+  -i inventory/ha-calico-kube-vip/inventory.ini \
+  playbooks/cluster.yml \
+  --become \
+  --list-tags
+```
+
+This prints all tags defined in the current version of the playbook and roles. Treat this output as informational: internal Kubespray tags are not guaranteed to be stable across releases, and only the lab-specific tags documented above are considered part of this scenario's public interface.
+
+### Advanced: inspect KVM preflight wiring
+
+The `kvm_preflight` role is wired into this scenario and runs automatically when `kvm_preflight_enabled: true` in the inventory (the `inventory/ha-calico-kube-vip` scenario already sets it). If you want to double-check that the play which runs these checks is present in your current `cluster.yml`, you can list the plays and tags and grep for the KVM preflight entry:
+
+```bash
+source .venv/bin/activate
+ansible-playbook \
+  -i inventory/ha-calico-kube-vip/inventory.ini \
+  playbooks/cluster.yml \
+  --become \
+  --list-tags | grep -i "KVM preflight" || true
+```
+
+This command **does not** run the preflight role or install anything; it only inspects the playbook metadata. You should see an entry similar to:
+
+```text
+play #N (kube_node): Run KVM preflight checks on worker nodes  TAGS: []
+```
+
+which confirms that the worker-node KVM validation is part of the standard `cluster.yml` run.
 
 ## Troubleshooting
 
