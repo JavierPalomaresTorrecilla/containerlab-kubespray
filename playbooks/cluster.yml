@@ -106,8 +106,6 @@
 - name: Copy admin kubeconfig to control-plane users
   hosts: kube_control_plane
   become: true
-  tags:
-    - kubeconfig_admin
   tasks:
     - name: Ensure user kube dir exists
       ansible.builtin.file:
@@ -124,5 +122,31 @@
         owner: "{{ ansible_user }}"
         group: "{{ ansible_user }}"
         mode: "0600"
+        remote_src: true
 
+- name: Enforce kubeconfig location under ansible user
+  hosts: kube_control_plane
+  become: true
+  tasks:
+    - name: Ensure kube dir exists for ansible user
+      ansible.builtin.file:
+        path: "/home/{{ ansible_user }}/.kube"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0700"
+
+    - name: Copy /etc/kubernetes/admin.conf to ansible user home
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        dest: "/home/{{ ansible_user }}/.kube/config"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0600"
+        remote_src: true
+
+    - name: Remove root kubeconfig copy
+      ansible.builtin.file:
+        path: /root/.kube/config
+        state: absent
 

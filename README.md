@@ -1,131 +1,176 @@
-# Deploy a Production Ready Kubernetes Cluster
+## Deploy a Production Ready Kubernetes Cluster
 
 ![Kubernetes Logo](https://raw.githubusercontent.com/kubernetes-sigs/kubespray/master/docs/img/kubernetes-logo.png)
 
-If you have questions, check the documentation at [kubespray.io](https://kubespray.io) and join us on the [kubernetes slack](https://kubernetes.slack.com), channel **\#kubespray**.
-You can get your invite [here](http://slack.k8s.io/)
+This repository builds on [kubespray](https://github.com/kubernetes-sigs/kubespray) to provide a reproducible lab environment that uses Calico, kube-vip, optional kube-vip cloud provider automation, and lab cleanup tooling. If you need the full Kubespray documentation, refer to [kubespray.io](https://kubespray.io) or join [#kubespray on the Kubernetes Slack](https://kubernetes.slack.com).
 
-- Can be deployed on **[AWS](docs/cloud_providers/aws.md), GCE, [Azure](docs/cloud_providers/azure.md), [OpenStack](docs/cloud_controllers/openstack.md), [vSphere](docs/cloud_controllers/vsphere.md), [Equinix Metal](docs/cloud_providers/equinix-metal.md) (bare metal), Oracle Cloud Infrastructure (Experimental), or Baremetal**
-- **Highly available** cluster
-- **Composable** (Choice of the network plugin for instance)
-- Supports most popular **Linux distributions**
-- **Continuous integration tests**
+## Overview
 
----
+1. Automates a highly available Kubernetes cluster using the inventory at `inventory/ha-calico-kube-vip/inventory.ini` (three control-plane nodes, worker nodes, Calico CNI, kube-vip for both API and LoadBalancer VIPs).
+2. Wires cluster-specific overrides under `inventory/ha-calico-kube-vip/group_vars/` to enable kube-vip services, kube-vip cloud provider IPAM, KVM preflight checks, and other lab tweaks.
+3. Provides `scripts/uninstall.sh` and `playbooks/uninstall.yml` to tear down the lab, validate that no Kubernetes components remain, and optionally remove KVM packages.
 
-> **Note:** This is a simplified guide tailored to a specific setup. For full details, check the [official repository](https://github.com/kubernetes-sigs/kubespray).
+## Requirements
 
-### Prepare the Inventory
+### Host requirements
 
-Before proceeding with the installation, make sure to update your inventory file (`inventory.ini`) with the IP addresses and SSH credentials of all your control plane and worker nodes. In our case, the path is the following: `inventory/ha-calico-kube-vip/group_vars/inventory.ini`
+1. Linux control host (tested on Ubuntu 24.04) with outbound SSH access to every node listed in the inventory.
+2. SSH access to the lab nodes as the Ansible SSH user defined in `inventory/ha-calico-kube-vip/inventory.ini` (`ansible_ssh_user=ubuntu` by default).
+3. Nodes sized to run Kubernetes (2 vCPU/4 GB RAM minimum recommended).
 
-### Update the Config Variables
+### Software requirements on the Ansible control host
 
-As a last step, is it worth to check the configuration of the current cluser that is about to be provisioned. The configuration is provided under `/inventory`. Under it, I created `/ha-calico-kube-vip`, which as the name states, it contains the configuration to provision a high available Kubernetes cluster, along with Calico and Kube-vip. Special attention to `/ha-calico-kube-vip/group_vars/k8s_cluster/k8s-cluster.yml` which contains Kubernetes version, Virtual IP (VIP), among other key parameters.
+1. `git` to clone this repository.
+2. Python 3.10+ (system package `python3`) with `venv` support.
 
-### Cluster Installation
+### KVM requirements
 
-Provision a highly available Kubernetes cluster:
+The lab assumes KVM acceleration. Verify virtualization support and module availability before deploying:
 
 ```bash
-ansible-playbook -i inventory/ha-calico-kube-vip/inventory.ini \
-  -u goat --become --ask-become-pass cluster.yml
+lsmod | grep kvm || echo "kvm kernel module not loaded"
+egrep -c '(vmx|svm)' /proc/cpuinfo
 ```
 
-If your `kube-vip` configuration needs to be updated, rerun the playbook with the relevant tag:
+On Ubuntu hosts, install the typical packages and enable libvirt:
 
 ```bash
-ansible-playbook -i inventory/ha-calico-kube-vip/inventory.ini \
-  -u goat --become --ask-become-pass --tags kube-vip cluster.yml
+sudo apt update
+sudo apt install -y qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils
+sudo systemctl enable --now libvirtd
 ```
 
----
+The `roles/kvm_preflight` role verifies CPU virtualization flags, `/dev/kvm`, and loaded modules before the Kubernetes installation begins.
 
-### Validate the Cluster
+## Python virtual environment and Ansible dependencies
 
-1. **SSH into a control plane node:**
+All commands assume you are inside a virtualenv located at the repository root.
 
 ```bash
-ssh goat@<CONTROL_PLANE_NODE_1_IP>
+cd containerlab-kubespray
+
+python3 -m venv .venv
+source .venv/bin/activate
 ```
 
-2. **Configure kubectl on your local environment:**
+Install the required tooling inside the virtualenv:
 
 ```bash
-mkdir -p ~/.kube
-sudo cp /root/.kube/config ~/.kube/config
-sudo chown $(id -u):$(id -g) ~/.kube/config
+# Upgrade pip
+python -m pip install --upgrade pip
+
+# Pin ansible-core to the required version
+python -m pip install --force-reinstall "ansible-core==2.17.3"
+
+# Required Ansible collections
+ansible-galaxy collection install community.general
+ansible-galaxy collection install kubernetes.core
+ansible-galaxy collection install community.crypto
+ansible-galaxy collection install ansible.utils
+
+# Python libraries used by the playbooks
+python -m pip install jmespath
+python -m pip install netaddr
 ```
 
-3. **Verify the cluster is up:**
+If the repository later adds `requirements.txt` or `requirements.yml`, prefer those, but the commands above are the tested setup.
+
+## Repository setup and inventory
+
+Clone and enter the repository, then activate the virtualenv:
 
 ```bash
+git clone <repo-url>
+cd containerlab-kubespray
+source .venv/bin/activate
+```
+
+The default lab inventory lives at `inventory/ha-calico-kube-vip/inventory.ini` and defines:
+
+1. `k8s_cluster` – all Kubernetes hosts.
+2. `kube_control_plane` – the three control-plane nodes.
+3. `kube_node` – worker nodes.
+
+Update hostnames, IP addresses, and `ansible_ssh_user` in this file to reflect your lab environment. Additional tunables sit under `inventory/ha-calico-kube-vip/group_vars/`.
+
+## Deploying the Kubernetes lab cluster
+
+Run the main playbook from the repo root:
+
+```bash
+ansible-playbook \
+  -i inventory/ha-calico-kube-vip/inventory.ini \
+  playbooks/cluster.yml \
+  --limit k8s_cluster \
+  --become
+```
+
+This playbook:
+
+1. Performs host bootstrap, version checks, and KVM preflight validation.
+2. Installs container runtime, etcd, Kubernetes control plane, and joins worker nodes.
+3. Configures Calico networking, Multus (if enabled), kube-vip for control-plane and service VIPs, and the kube-vip cloud provider IPAM.
+4. Copies `/etc/kubernetes/admin.conf` into `/home/{{ ansible_user }}/.kube/config` on every control-plane host using `remote_src: true`, ensures the directory is `0700`, the file is `0600`, and removes `/root/.kube/config` so the SSH user owns the default kubeconfig.
+
+## Verifying the cluster
+
+From a control-plane host logged in as the Ansible SSH user:
+
+```bash
+ssh ubuntu@kubecp-1
 kubectl get nodes
-kubectl get pods -A
+kubectl get pods -n kube-system
 ```
 
-4. **Check the Virtual IP (VIP):**
+To double-check using the admin kubeconfig directly:
 
 ```bash
-ping <VIP>
+sudo KUBECONFIG=/etc/kubernetes/admin.conf kubectl get nodes
 ```
 
----
+Expected output: all control-plane and worker nodes appear in `Ready` state once CNI and core components finish reconciling.
 
-### Configure External Access
+## Uninstalling the lab
 
-1. **Backup your current kubeconfig:**
+Tear-down uses the bundled script and playbook. Run either mode from the repo root while the virtualenv is active:
+
+Standard cleanup (keeps KVM packages):
 
 ```bash
-cp ~/.kube/config ~/.kube/config-external
+ansible-playbook \
+  -i inventory/ha-calico-kube-vip/inventory.ini \
+  playbooks/uninstall.yml \
+  --tags uninstall_standard
 ```
 
-2. **Replace `127.0.0.1` with the VIP address:**
+Full reset (also removes `qemu-kvm`, `libvirt-daemon-system`, `libvirt-clients`, `bridge-utils` on Debian/Ubuntu by exporting `FULL_RESET=1`):
 
 ```bash
-export VIP=192.168.200.147
-sed -i "s|https://127.0.0.1:6443|https://$VIP:6443|" ~/.kube/config-external
+ansible-playbook \
+  -i inventory/ha-calico-kube-vip/inventory.ini \
+  playbooks/uninstall.yml \
+  --tags uninstall_full_reset
 ```
 
-3. **Test using the external kubeconfig:**
+`scripts/uninstall.sh` performs:
 
-```bash
-kubectl --kubeconfig ~/.kube/config-external get nodes
-```
-Congratulations! You can now share the external kubeconfig with authorised users.
+1. `kubeadm reset -f` when present, followed by removal of `/etc/kubernetes`, `/var/lib/kubelet`, `/var/lib/etcd`, `/var/lib/cni`, `/etc/cni/net.d`.
+2. iptables filter/nat/mangle flushes and IPVS cleanup.
+3. Removal of lab-created kubeconfig copies in each user home and optional pruning of empty `~/.kube` directories.
+4. Deletion of kube-vip cloud provider manifests under `${KUBE_DIR:-/etc/kubernetes}/addons/kube_vip_cloud_provider`.
+5. Removal of `/etc/modules-load.d/kvm.conf` if it matches the lab-created content.
+6. **FULL_RESET mode** additionally removes the KVM package set on Debian/Ubuntu systems.
 
----
+After the uninstall command, `playbooks/uninstall.yml` verifies that `kubectl` cannot talk to an API server, Kubernetes systemd units are stopped, and the core directories are absent on every node.
 
-### Manual steps that would be cool to automate (now mostly covered):
+## Re-deploying after uninstall
 
-1. **Kube-vip cloud provider installation and ConfigMap**:
-   Set these variables in `inventory/ha-calico-kube-vip/group_vars/k8s_cluster/k8s-cluster.yml`:
-   ```yaml
-   kube_vip_cloud_provider_enabled: true
-   kube_vip_cloud_provider_lb_ip_range: "192.168.200.161-192.168.200.165"
-   ```
-   Kubespray will deploy the kube-vip cloud provider during the *Install Kubernetes apps* phase and automatically create/patch the `kubevip` ConfigMap in `kube-system` with `range-global=192.168.200.161-192.168.200.165`. The manual commands below are kept for reference only and are no longer required.
-   ```bash
-   kubectl apply -f https://raw.githubusercontent.com/kube-vip/kube-vip-cloud-provider/main/manifest/kube-vip-cloud-controller.yaml
-   kubectl create configmap -n kube-system kubevip --from-literal range-global=192.168.200.161-192.168.200.165
-   kubectl delete pod -n kube-system kube-vip-cloud-provider-<pod-id>
-   ```
+Once uninstall completes without asserts, rerun the deployment command from the “Deploying the Kubernetes lab cluster” section. The playbook recreates kubeconfigs under `/home/{{ ansible_user }}/.kube/` automatically, so no manual steps are required.
 
-2. **Clabernetes installation**:
-   Follow [Clabernetes official documentation](https://containerlab.dev/manual/clabernetes/install/)
+## Troubleshooting
 
-3. **Installation of custom monitoring stack**:
-   TODO. Check with @Cesar, as he has previous experience deploying it.
-
----
-
-### Clean Up (Uninstallation)
-
-To remove the Kubernetes cluster:
-
-```bash
-ansible-playbook -i inventory/ha-calico-kube-vip/inventory.ini \
-  -u goat --become --ask-become-pass reset.yml
-```
-
----
+1. **`You need to install "jmespath" prior to running json_query filter`** – ensure `python -m pip install jmespath` was executed inside `.venv` before running Ansible.
+2. **`Invalid plugin FQCN (community.crypto.x509_certificate_info)`** – rerun `ansible-galaxy collection install community.crypto` inside the virtualenv.
+3. **Permission denied when reading `/etc/kubernetes/admin.conf`** – confirm your inventory’s `ansible_ssh_user` has passwordless sudo (or supply `--ask-become-pass`) and re-run with `--become`; the copy task relies on root access plus `remote_src: true`.
+4. **KVM checks fail (missing `vmx/svm` or `/dev/kvm`)** – verify BIOS virtualization options are enabled and that `kvm_intel` or `kvm_amd` are loaded (`lsmod | grep kvm`). If needed, set `kvm_preflight_auto_install: true` in the inventory to let the playbook install modules on Debian/Ubuntu.
+5. **Residual cluster artifacts after uninstall** – rerun `ansible-playbook ... playbooks/uninstall.yml --tags uninstall_full_reset` and review assert messages pointing to remaining services or directories.

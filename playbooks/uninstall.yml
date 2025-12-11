@@ -32,6 +32,105 @@
       ansible.builtin.command:
         argv:
           - "{{ lab_uninstall_remote_path }}"
+      register: uninstall_standard_result
+      changed_when: uninstall_standard_result.rc == 0
+
+    # Verification block – ensure cluster is really gone on this node
+    - name: Check if kubectl is present
+      ansible.builtin.command: which kubectl
+      register: kubectl_which
+      failed_when: false
+      changed_when: false
+
+    - name: Try kubectl get nodes if kubectl exists
+      ansible.builtin.command: kubectl get nodes
+      register: kubectl_get_nodes
+      when: kubectl_which.rc == 0
+      failed_when: false
+      changed_when: false
+
+    - name: Assert kubectl cannot talk to an API server
+      ansible.builtin.assert:
+        that:
+          - kubectl_which.rc != 0
+            or kubectl_get_nodes.rc != 0
+        fail_msg: >
+          kubectl can still talk to a Kubernetes API server on
+          {{ inventory_hostname }} after uninstall. Cluster is not fully removed.
+
+    - name: Check status of Kubernetes-related systemd services
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: started
+      register: kube_svc_probe
+      loop:
+        - kubelet
+        - kube-apiserver
+        - kube-controller-manager
+        - kube-scheduler
+        - etcd
+      failed_when: false
+      changed_when: false
+
+    - name: Assert Kubernetes-related services are not active
+      ansible.builtin.assert:
+        that: >
+          kube_svc_probe.results | default([]) |
+          selectattr('status.ActiveState', 'defined') |
+          selectattr('status.ActiveState', 'in', ['active', 'running']) |
+          list | length == 0
+        fail_msg: >
+          One or more Kubernetes-related systemd services are still active on
+          {{ inventory_hostname }} after uninstall:
+          {{
+            kube_svc_probe.results | default([]) |
+            selectattr('status.ActiveState', 'defined') |
+            map(attribute='status') | list
+          }}
+
+    - name: Stat core Kubernetes directories
+      become: true
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: kube_dir_stats
+      loop:
+        - /etc/kubernetes
+        - /var/lib/kubelet
+        - /var/lib/etcd
+
+    - name: Remove lingering Kubernetes directories detected by verification
+      become: true
+      ansible.builtin.file:
+        path: "{{ item.stat.path }}"
+        state: absent
+      loop: "{{ kube_dir_stats.results | default([]) }}"
+      when:
+        - item.stat is defined
+        - item.stat.exists | default(false)
+
+    - name: Re-stat core Kubernetes directories
+      become: true
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: kube_dir_stats
+      loop:
+        - /etc/kubernetes
+        - /var/lib/kubelet
+        - /var/lib/etcd
+
+    - name: Assert core Kubernetes directories are absent
+      ansible.builtin.assert:
+        that:
+          - kube_dir_stats.results | default([]) |
+            selectattr('stat.exists', 'eq', true) |
+            list | length == 0
+        fail_msg: >
+          Kubernetes directories still exist on {{ inventory_hostname }} after uninstall:
+          {{
+            kube_dir_stats.results | default([]) |
+            selectattr('stat.exists', 'eq', true) |
+            map(attribute='stat.path') | list
+          }}
 
 - name: Uninstall lab Kubernetes cluster (FULL_RESET)
   hosts: k8s_cluster
@@ -67,4 +166,117 @@
         cmd: "{{ lab_uninstall_remote_path }}"
       environment:
         FULL_RESET: "1"
+      register: uninstall_full_reset_result
+      changed_when: uninstall_full_reset_result.rc == 0
 
+    - name: Remove core Kubernetes directories (safety net)
+      become: true
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/kubernetes
+        - /var/lib/kubelet
+        - /var/lib/etcd
+
+    # Verification block – ensure cluster is really gone on this node
+    - name: Check if kubectl is present
+      ansible.builtin.command: which kubectl
+      register: kubectl_which
+      failed_when: false
+      changed_when: false
+
+    - name: Try kubectl get nodes if kubectl exists
+      ansible.builtin.command: kubectl get nodes
+      register: kubectl_get_nodes
+      when: kubectl_which.rc == 0
+      failed_when: false
+      changed_when: false
+
+    - name: Assert kubectl cannot talk to an API server
+      ansible.builtin.assert:
+        that:
+          - kubectl_which.rc != 0
+            or kubectl_get_nodes.rc != 0
+        fail_msg: >
+          kubectl can still talk to a Kubernetes API server on
+          {{ inventory_hostname }} after uninstall. Cluster is not fully removed.
+
+    - name: Check status of Kubernetes-related systemd services
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: started
+      register: kube_svc_probe
+      loop:
+        - kubelet
+        - kube-apiserver
+        - kube-controller-manager
+        - kube-scheduler
+        - etcd
+      failed_when: false
+      changed_when: false
+
+    - name: Assert Kubernetes-related services are not active
+      ansible.builtin.assert:
+        that: >
+          kube_svc_probe.results | default([]) |
+          selectattr('status.ActiveState', 'defined') |
+          selectattr('status.ActiveState', 'in', ['active', 'running']) |
+          list | length == 0
+        fail_msg: >
+          One or more Kubernetes-related systemd services are still active on
+          {{ inventory_hostname }} after uninstall:
+          {{
+            kube_svc_probe.results | default([]) |
+            selectattr('status.ActiveState', 'defined') |
+            map(attribute='status') | list
+          }}
+
+    - name: Stat core Kubernetes directories
+      become: true
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: kube_dir_stats
+      loop:
+        - /etc/kubernetes
+        - /var/lib/kubelet
+        - /var/lib/etcd
+
+    - name: Debug core Kubernetes directory stats (first pass)
+      ansible.builtin.debug:
+        var: kube_dir_stats.results
+
+    - name: Remove lingering core Kubernetes directories after stat
+      become: true
+      ansible.builtin.file:
+        path: "{{ item.stat.path }}"
+        state: absent
+      loop: "{{ kube_dir_stats.results | default([]) | selectattr('stat.exists', 'eq', true) | list }}"
+
+    - name: Re-stat core Kubernetes directories after remediation
+      become: true
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /etc/kubernetes
+        - /var/lib/kubelet
+        - /var/lib/etcd
+      register: kube_dir_stats_after
+
+    - name: Debug core Kubernetes directory stats (second pass)
+      ansible.builtin.debug:
+        var: kube_dir_stats_after.results
+
+    - name: Assert core Kubernetes directories are absent
+      ansible.builtin.assert:
+        that:
+          - kube_dir_stats_after.results | default([]) |
+            selectattr('stat.exists', 'eq', true) |
+            list | length == 0
+        fail_msg: >
+          Kubernetes directories still exist on {{ inventory_hostname }} after FULL_RESET:
+          {{
+            kube_dir_stats_after.results | default([]) |
+            selectattr('stat.exists', 'eq', true) |
+            map(attribute='stat.path') | list
+          }}

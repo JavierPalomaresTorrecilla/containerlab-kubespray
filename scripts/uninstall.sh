@@ -105,12 +105,30 @@ else
 fi
 
 if [[ "${FULL_RESET:-0}" == "1" ]]; then
-  log_info "FULL_RESET mode: removing KVM packages"
   if [[ -r /etc/os-release ]] && grep -qiE 'debian|ubuntu' /etc/os-release; then
+    log_info "FULL_RESET mode: removing Kubernetes packages"
+    apt-get remove -y kubelet kubeadm kubectl || log_warn "Failed to remove some Kubernetes packages"
+
+    log_info "FULL_RESET mode: removing KVM packages"
     apt-get remove -y qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils || log_warn "Failed to remove some KVM packages"
   else
     log_warn "FULL_RESET requested but OS is not Debian/Ubuntu; skipping package removal"
   fi
+
+  echo "[FULL_RESET] Running kubeadm reset on this node (best effort)..."
+  if command -v kubeadm >/dev/null 2>&1; then
+    kubeadm reset -f || echo "[FULL_RESET] kubeadm reset failed or cluster already removed"
+  else
+    echo "[FULL_RESET] kubeadm not found, skipping kubeadm reset"
+  fi
+
+  echo "[FULL_RESET] Stopping kubelet service (best effort)..."
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl disable --now kubelet 2>/dev/null || true
+  fi
+
+  echo "[FULL_RESET] Removing core Kubernetes directories..."
+  rm -rf /etc/kubernetes /var/lib/kubelet /var/lib/etcd
 fi
 
 log_info "Cleanup completed"
