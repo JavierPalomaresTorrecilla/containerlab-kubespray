@@ -42,6 +42,23 @@ sudo systemctl enable --now libvirtd
 
 The `roles/kvm_preflight` role verifies CPU virtualization flags, `/dev/kvm`, and loaded modules before the Kubernetes installation begins.
 
+#### Optional: verify KVM preflight on workers
+
+The `kvm_preflight` role runs automatically whenever `kvm_preflight_enabled: true` in the inventory (the `inventory/ha-calico-kube-vip` scenario already sets it). To confirm the play is present you can list the playbook tags and grep for the KVM entry:
+
+```bash
+# List plays and tags for this scenario
+source .venv/bin/activate
+ansible-playbook \
+  -i inventory/ha-calico-kube-vip/inventory.ini \
+  playbooks/cluster.yml \
+  --limit k8s_cluster \
+  --become --list-tags | grep -i "KVM preflight" || true
+```
+
+Expected output (if wired correctly):
+`play #N (kube_node): Run KVM preflight checks on worker nodes  TAGS: []`, which confirms the worker validation step is part of the standard `cluster.yml` run.
+
 ## Python virtual environment and Ansible dependencies
 
 All commands assume you are inside a virtualenv located at the repository root.
@@ -112,51 +129,7 @@ This playbook:
 3. Configures Calico networking, Multus (if enabled), kube-vip for control-plane and service VIPs, and the kube-vip cloud provider IPAM.
 4. Copies `/etc/kubernetes/admin.conf` into `/home/{{ ansible_user }}/.kube/config` on every control-plane host using `remote_src: true`, ensures the directory is `0700`, the file is `0600`, and removes `/root/.kube/config` so the SSH user owns the default kubeconfig.
 
-### Control-plane Virtual IP (kube-vip)
-
-- All lab nodes share a flat Layer-2 network (default: `192.168.123.0/24`).
-- [kube-vip](https://kube-vip.io/) announces a virtual IP on that LAN so the Kubernetes API stays reachable even if the physical control-plane node changes.
-- Current settings:
-  - VIP: `192.168.123.200`
-  - Interface: `ens3`
-- kube-vip keeps the VIP on one control-plane node at a time; ARP-based failover moves it automatically if that node goes down.
-- Kubernetes API endpoint: `https://192.168.123.200:6443`
-
-### Generating and Using the External kubeconfig
-
-After the cluster is up, generate a kubeconfig that points to the VIP by running:
-
-```bash
-ansible-playbook \
-  -i inventory/ha-calico-kube-vip/inventory.ini \
-  playbooks/cluster.yml \
-  --tags external_kubeconfig
-```
-
-This tagged play:
-
-- Ensures the Ansible SSH user (from `ansible_user_dir` / `ansible_env.HOME`) has `~/.kube/config` populated from `/etc/kubernetes/admin.conf`.
-- Creates `~/.kube/config-external` if missing.
-- Rewrites its API server to `https://192.168.123.200:6443` (the kube-vip VIP).
-- Runs `kubectl --kubeconfig ~/.kube/config-external get nodes` as a smoke test.
-
-Key notes:
-
-- The external kubeconfig is idempotent; if it already points to the VIP, it will not be overwritten.
-- You can manually verify access with:
-
-  ```bash
-  kubectl --kubeconfig ~/.kube/config-external get nodes
-  ```
-
-- Share `~/.kube/config-external` with trusted users or tools that need API access via kube-vip.
-
-**Recap**
-
-- Deploy the cluster with `playbooks/cluster.yml`.
-- Confirm kube-vip is running and `192.168.123.200` responds on your LAN.
-- Run `--tags external_kubeconfig` to create `~/.kube/config-external`.
-- Use `kubectl --kubeconfig ~/.kube/config-external …` from your workstation or automation.
+> Note: kube-vip is responsible for the control-plane virtual IP and optional bare-metal LoadBalancer addresses. For details on VIP configuration and the external kubeconfig, see [Kube-vip integration (virtual IPs)](#kube-vip-integration-virtual-ips) and [External access via kube-vip](#external-access-via-kube-vip).
 
 ## Kube-vip integration (virtual IPs)
 
@@ -165,14 +138,14 @@ This lab uses [kube-vip](https://kube-vip.io/) to provide a virtual IP (VIP) for
 ### Control plane virtual IP
 
 - The virtual IP for the API server is configured via `kube_vip_enabled: true` and `kube_vip_address` in `inventory/sample/cluster/k8s-cluster.yml`.
-- The VIP must be an unused address on the same Layer 2 network as the control plane nodes. In the default GEANT lab, it is `192.168.200.147`.
-- `kube_vip_interface` must match the Linux network interface that is connected to that network on the control plane node (for example `ens18` or `eth0`). You can verify this with `ip addr`.
+- The VIP must be an unused address on the same Layer 2 network as the control plane nodes. In the default GEANT lab, it is `192.168.123.200`.
+- `kube_vip_interface` must match the Linux network interface that is connected to that network on the control plane node (for example `ens3` or `eth0`). You can verify this with `ip addr`.
 - A kube-vip pod runs on the control plane node and answers ARP for the VIP. If you deploy multiple control plane nodes, kube-vip will use leader election so that only one node advertises the VIP at a time and the API endpoint stays reachable.
 
 ### LoadBalancer services on bare metal
 
 - `kube_vip_cloud_provider_enabled: true` turns on the kube-vip cloud provider and allows you to create `type: LoadBalancer` services on bare metal.
-- The IP range used for `LoadBalancer` services is configured via `kube_vip_cloud_provider_lb_ip_range`, for example `192.168.200.161-192.168.200.165`.
+- The IP range used for `LoadBalancer` services is configured via `kube_vip_cloud_provider_lb_ip_range`, for example `192.168.123.201-192.168.123.205`.
 - All addresses in this range must belong to the same subnet as the nodes and must not be used by any other host or device.
 - When you create a `LoadBalancer` service, kube-vip allocates one of these IPs, advertises it on the network, and forwards traffic to the selected service endpoints inside the cluster.
 
@@ -224,23 +197,6 @@ kubectl --kubeconfig ~/.kube/config-external get nodes
 
 > **Warning:** `~/.kube/config-external` grants full API access. Share it only with trusted users and rotate credentials if it is ever exposed.
 
-#### Optional: verify KVM preflight on workers
-
-The `kvm_preflight` role runs automatically whenever `kvm_preflight_enabled: true` in the inventory (the `inventory/ha-calico-kube-vip` scenario already sets it). To confirm the play is present you can list the playbook tags and grep for the KVM entry:
-
-```bash
-# List plays and tags for this scenario
-source .venv/bin/activate
-ansible-playbook \
-  -i inventory/ha-calico-kube-vip/inventory.ini \
-  playbooks/cluster.yml \
-  --limit k8s_cluster \
-  --become --list-tags | grep -i "KVM preflight" || true
-```
-
-Expected output (if wired correctly):
-`play #N (kube_node): Run KVM preflight checks on worker nodes  TAGS: []`, which confirms the worker validation step is part of the standard `cluster.yml` run.
-
 ## Verifying the cluster
 
 From a control-plane host logged in as the Ansible SSH user:
@@ -280,7 +236,8 @@ Ensure `/etc/hosts` contains both localhost and the node hostname, for example:
 127.0.0.1   localhost
 ::1         localhost ip6-localhost ip6-loopback
 
-127.0.1.1   kubeworker-1
+192.168.123.164   kubecp-1
+192.168.123.184   kubeworker-1
 ```
 
 After correcting `/etc/hosts`, restart the DaemonSet pod so it picks up the fix:
@@ -334,4 +291,3 @@ Once uninstall completes without asserts, rerun the deployment command from the 
 2. **`Invalid plugin FQCN (community.crypto.x509_certificate_info)`** – rerun `ansible-galaxy collection install community.crypto` inside the virtualenv.
 3. **Permission denied when reading `/etc/kubernetes/admin.conf`** – confirm your inventory’s `ansible_ssh_user` has passwordless sudo (or supply `--ask-become-pass`) and re-run with `--become`; the copy task relies on root access plus `remote_src: true`.
 4. **KVM checks fail (missing `vmx/svm` or `/dev/kvm`)** – verify BIOS virtualization options are enabled and that `kvm_intel` or `kvm_amd` are loaded (`lsmod | grep kvm`). If needed, set `kvm_preflight_auto_install: true` in the inventory to let the playbook install modules on Debian/Ubuntu.
-5. **Residual cluster artifacts after uninstall** – rerun `ansible-playbook ... playbooks/uninstall.yml --tags uninstall_full_reset` and review assert messages pointing to remaining services or directories.
