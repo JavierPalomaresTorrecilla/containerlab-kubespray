@@ -397,4 +397,11 @@ download_retries: 10
 
 # Configure external kubeconfig for kube-vip (post-install convenience)
 configure_external_kubeconfig: true
+
+# Clabernetes installation
+clabernetes_enabled: true
+clabernetes_namespace: c9s
+clabernetes_release_name: clabernetes
+clabernetes_chart_ref: "oci://ghcr.io/srl-labs/clabernetes/clabernetes"
+clabernetes_helm_binary: helm
 ###################################################################################

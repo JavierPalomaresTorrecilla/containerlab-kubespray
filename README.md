@@ -114,6 +114,28 @@ This playbook:
 
 > Note: kube-vip is responsible for the control-plane virtual IP and optional bare-metal LoadBalancer addresses. For details on VIP configuration and the external kubeconfig, see [Kube-vip integration (virtual IPs)](#kube-vip-integration-virtual-ips) and [External access via kube-vip](#external-access-via-kube-vip).
 
+
+### Advanced: inspect KVM preflight wiring
+
+The `kvm_preflight` role is wired into this scenario and runs automatically when `kvm_preflight_enabled: true` in the inventory (the `inventory/ha-calico-kube-vip` scenario already sets it). If you want to double-check that the play which runs these checks is present in your current `cluster.yml`, you can list the plays and tags and grep for the KVM preflight entry:
+
+```bash
+source .venv/bin/activate
+ansible-playbook \
+  -i inventory/ha-calico-kube-vip/inventory.ini \
+  playbooks/cluster.yml \
+  --become \
+  --list-tags | grep -i "KVM preflight" || true
+```
+
+This command **does not** run the preflight role or install anything; it only inspects the playbook metadata. You should see an entry similar to:
+
+```text
+play #N (kube_node): Run KVM preflight checks on worker nodes  TAGS: []
+```
+
+which confirms that the worker-node KVM validation is part of the standard `cluster.yml` run.
+
 ## Kube-vip integration (virtual IPs)
 
 This lab uses [kube-vip](https://kube-vip.io/) to provide a virtual IP (VIP) for the Kubernetes control plane and to implement bare metal type `LoadBalancer` services without an external cloud provider.
@@ -179,6 +201,36 @@ kubectl --kubeconfig ~/.kube/config-external get nodes
 ```
 
 > **Warning:** `~/.kube/config-external` grants full API access. Share it only with trusted users and rotate credentials if it is ever exposed.
+
+## Clabernetes manager
+
+This scenario installs the [Clabernetes](https://github.com/srl-labs/clabernetes) manager via Helm so you can schedule Containerlab-based workloads inside the Kubernetes cluster. The tasks are disabled by default and only run when explicitly enabled.
+
+### Enabling the Helm deploy
+
+Set the following variables in `inventory/ha-calico-kube-vip/group_vars/k8s_cluster/k8s-cluster.yml` (or pass them with `-e`):
+
+```yaml
+clabernetes_enabled: true
+clabernetes_namespace: c9s
+clabernetes_release_name: clabernetes
+clabernetes_chart_ref: "oci://ghcr.io/srl-labs/clabernetes/clabernetes"
+clabernetes_helm_binary: helm
+```
+
+The playbook checks `helm version --short` on the controller and installs the `helm` package if it is missing. Once the cluster is up, run the tagged play:
+
+```bash
+ansible-playbook \
+  -i inventory/ha-calico-kube-vip/inventory.ini \
+  playbooks/cluster.yml \
+  --become \
+  --tags clabernetes_install
+```
+
+The role executes `helm upgrade --install --create-namespace --namespace c9s {{ release_name }} {{ chart_ref }}` from the Ansible control host, so the `c9s` namespace is created automatically by Helm and no Python Kubernetes client is required. The play is idempotent and can be re-run at any time to upgrade the manager.
+
+> The automation only installs the Clabernetes manager. Generating CRDs (for example via `clabverter`) remains a manual step outside of Ansible.
 
 ## Verifying the cluster
 
@@ -327,27 +379,6 @@ ansible-playbook \
 ```
 
 This prints all tags defined in the current version of the playbook and roles. Treat this output as informational: internal Kubespray tags are not guaranteed to be stable across releases, and only the lab-specific tags documented above are considered part of this scenario's public interface.
-
-### Advanced: inspect KVM preflight wiring
-
-The `kvm_preflight` role is wired into this scenario and runs automatically when `kvm_preflight_enabled: true` in the inventory (the `inventory/ha-calico-kube-vip` scenario already sets it). If you want to double-check that the play which runs these checks is present in your current `cluster.yml`, you can list the plays and tags and grep for the KVM preflight entry:
-
-```bash
-source .venv/bin/activate
-ansible-playbook \
-  -i inventory/ha-calico-kube-vip/inventory.ini \
-  playbooks/cluster.yml \
-  --become \
-  --list-tags | grep -i "KVM preflight" || true
-```
-
-This command **does not** run the preflight role or install anything; it only inspects the playbook metadata. You should see an entry similar to:
-
-```text
-play #N (kube_node): Run KVM preflight checks on worker nodes  TAGS: []
-```
-
-which confirms that the worker-node KVM validation is part of the standard `cluster.yml` run.
 
 ## Troubleshooting
 

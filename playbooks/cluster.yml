@@ -230,3 +230,66 @@
         msg: >
           external kubeconfig test: rc={{ external_kubeconfig_test.rc }};
           stdout={{ external_kubeconfig_test.stdout | default('') }}
+
+- name: Install Clabernetes manager (optional)
+  hosts: kube_control_plane[0]
+  become: true
+  gather_facts: false
+  tags:
+    - clabernetes
+    - clabernetes_install
+  vars:
+    clabernetes_namespace_value: "{{ clabernetes_namespace | default('c9s') }}"
+    clabernetes_release_name_value: "{{ clabernetes_release_name | default('clabernetes') }}"
+    clabernetes_chart_ref_value: "{{ clabernetes_chart_ref | default('oci://ghcr.io/srl-labs/clabernetes/clabernetes') }}"
+    clabernetes_helm_binary_value: "{{ clabernetes_helm_binary | default('helm') }}"
+    clabernetes_kubeconfig: "{{ lookup('env','HOME') | default(ansible_env.HOME) }}/.kube/config"
+  tasks:
+    - name: Skip Clabernetes installation when disabled
+      ansible.builtin.meta: end_play
+      when: not clabernetes_enabled | bool
+
+    - name: Check if helm binary is available on controller
+      delegate_to: localhost
+      run_once: true
+      ansible.builtin.command: "{{ clabernetes_helm_binary_value }} version --short"
+      register: clabernetes_helm_check
+      changed_when: false
+      failed_when: false
+
+    - name: Install Helm when missing
+      delegate_to: localhost
+      run_once: true
+      become: true
+      ansible.builtin.package:
+        name: helm
+        state: present
+      when: clabernetes_helm_check.rc != 0
+
+    - name: Re-check helm binary after installation
+      delegate_to: localhost
+      run_once: true
+      ansible.builtin.command: "{{ clabernetes_helm_binary_value }} version --short"
+      register: clabernetes_helm_check_verify
+      changed_when: false
+      failed_when: clabernetes_helm_check_verify.rc != 0
+
+    - name: Install/upgrade Clabernetes manager via Helm
+      delegate_to: localhost
+      run_once: true
+      ansible.builtin.command: >
+        {{ clabernetes_helm_binary_value }}
+        upgrade --install
+        --create-namespace
+        --namespace {{ clabernetes_namespace_value }}
+        {{ clabernetes_release_name_value }}
+        {{ clabernetes_chart_ref_value }}
+      environment:
+        KUBECONFIG: "{{ clabernetes_kubeconfig }}"
+      register: clabernetes_helm_result
+      changed_when: "'Release ' in (clabernetes_helm_result.stdout | default('')) or 'Release ' in (clabernetes_helm_result.stderr | default(''))"
+
+    - name: Debug Clabernetes Helm result
+      ansible.builtin.debug:
+        var: clabernetes_helm_result.stdout_lines
+      when: clabernetes_helm_result.stdout is defined
