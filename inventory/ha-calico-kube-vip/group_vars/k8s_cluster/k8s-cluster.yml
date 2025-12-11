@@ -375,8 +375,8 @@ remove_anonymous_access: false
 ###################################################################################
 # Enable kube-vip to expose the control plane via VIP
 kube_vip_enabled: true
-kube_vip_address: "192.168.200.147"  # Adjust to your chosen VIP
-kube_vip_interface: "ens18"          # Adjust to interface name
+kube_vip_address: "192.168.123.200"  # Adjust to your chosen VIP
+kube_vip_interface: "ens3"          # Adjust to interface name
 kube_vip_arp_enabled: true           # Kube-vip mode ARP
 kube_proxy_strict_arp: true          # Kube-vip mode ARP
 
@@ -390,6 +390,11 @@ kvm_preflight_enabled: true
 kvm_preflight_auto_install: true
 
 kube_vip_cloud_provider_enabled: true
-kube_vip_cloud_provider_lb_ip_range: "192.168.200.161-192.168.200.165"
+kube_vip_cloud_provider_lb_ip_range: "192.168.123.201-192.168.123.205"  # Adjust to your chosen range
 
+# Allow more attempts when downloading artifacts in flaky lab networks
+download_retries: 10
 
+# Configure external kubeconfig for kube-vip (post-install convenience)
+configure_external_kubeconfig: true
+###################################################################################

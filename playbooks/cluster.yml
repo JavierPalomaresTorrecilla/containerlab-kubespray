@@ -150,3 +150,83 @@
         path: /root/.kube/config
         state: absent
 
+- name: Configure external kubeconfig for kube-vip
+  hosts: "{{ groups['kube_control_plane'] | first }}"
+  gather_facts: false
+  become: false
+  tags:
+    - external_kubeconfig
+  vars:
+    kubeconfig_user_home: "{{ ansible_user_dir | default(ansible_env.HOME) }}"
+    kubeconfig_path: "{{ kubeconfig_user_home }}/.kube/config"
+    kubeconfig_external_path: "{{ kubeconfig_user_home }}/.kube/config-external"
+  tasks:
+    - name: Check admin.conf presence
+      become: true
+      stat:
+        path: /etc/kubernetes/admin.conf
+      register: admin_conf_stat
+
+    - name: Fail if admin.conf is missing
+      fail:
+        msg: "/etc/kubernetes/admin.conf not found; control plane not initialized"
+      when: not admin_conf_stat.stat.exists
+
+    - name: Ensure user kube dir exists for external config
+      become: true
+      file:
+        path: "{{ kubeconfig_user_home }}/.kube"
+        state: directory
+        mode: "0700"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+
+    - name: Stat main kubeconfig
+      stat:
+        path: "{{ kubeconfig_path }}"
+      register: kubeconfig_stat
+
+    - name: Copy admin.conf to user kubeconfig if missing
+      become: true
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: "{{ kubeconfig_path }}"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0600"
+        remote_src: true
+      when: not kubeconfig_stat.stat.exists
+
+    - name: Stat external kubeconfig
+      stat:
+        path: "{{ kubeconfig_external_path }}"
+      register: external_kubeconfig_stat
+
+    - name: Copy kubeconfig to external variant when missing
+      become: true
+      copy:
+        src: "{{ kubeconfig_path }}"
+        dest: "{{ kubeconfig_external_path }}"
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0600"
+        remote_src: true
+      when: not external_kubeconfig_stat.stat.exists
+
+    - name: Point external kubeconfig to kube-vip VIP
+      replace:
+        path: "{{ kubeconfig_external_path }}"
+        regexp: 'server: https://.*:6443'
+        replace: "server: https://{{ kube_vip_address }}:6443"
+
+    - name: Smoke test external kubeconfig
+      command: >
+        kubectl --kubeconfig {{ kubeconfig_external_path }} get nodes
+      register: external_kubeconfig_test
+      changed_when: false
+      failed_when: false
+
+    - debug:
+        msg: >
+          external kubeconfig test: rc={{ external_kubeconfig_test.rc }};
+          stdout={{ external_kubeconfig_test.stdout | default('') }}

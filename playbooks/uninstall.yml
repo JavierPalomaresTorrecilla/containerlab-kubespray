@@ -179,6 +179,28 @@
         - /var/lib/kubelet
         - /var/lib/etcd
 
+    - name: Stop and disable lingering Kubernetes systemd services
+      become: true
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+        daemon_reload: true
+      loop:
+        - kubelet
+        - etcd
+      register: kube_svc_disable
+      failed_when: false
+
+    - name: Remove custom Kubernetes unit files if present
+      become: true
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/kubelet.service
+        - /etc/systemd/system/etcd.service
+
     # Verification block – ensure cluster is really gone on this node
     - name: Check if kubectl is present
       ansible.builtin.command: which kubectl
