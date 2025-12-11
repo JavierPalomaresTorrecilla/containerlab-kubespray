@@ -127,6 +127,9 @@
 - name: Enforce kubeconfig location under ansible user
   hosts: kube_control_plane
   become: true
+  tags:
+    - kubeconfig_admin
+    - external_kubeconfig
   tasks:
     - name: Ensure kube dir exists for ansible user
       ansible.builtin.file:
@@ -151,16 +154,19 @@
         state: absent
 
 - name: Configure external kubeconfig for kube-vip
-  hosts: "{{ groups['kube_control_plane'] | first }}"
+  hosts: kube_control_plane[0]
   gather_facts: false
   become: false
-  tags:
-    - external_kubeconfig
   vars:
     kubeconfig_user_home: "{{ ansible_user_dir | default(ansible_env.HOME) }}"
     kubeconfig_path: "{{ kubeconfig_user_home }}/.kube/config"
     kubeconfig_external_path: "{{ kubeconfig_user_home }}/.kube/config-external"
+  tags:
+    - external_kubeconfig
   tasks:
+    - name: Skip external kubeconfig when feature disabled
+      ansible.builtin.meta: end_play
+      when: not configure_external_kubeconfig | default(false)
     - name: Check admin.conf presence
       become: true
       stat:

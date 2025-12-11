@@ -181,7 +181,6 @@ Then run the tagged play (this can be executed on an already-provisioned cluster
 ansible-playbook \
   -i inventory/ha-calico-kube-vip/inventory.ini \
   playbooks/cluster.yml \
-  --become \
   --tags external_kubeconfig
 ```
 
